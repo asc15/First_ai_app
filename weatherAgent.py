@@ -1,9 +1,14 @@
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 from langchain.agents import create_agent
+from langgraph.checkpoint.postgres import PostgresSaver
 import os
 import requests
+
 load_dotenv()  # Load environment variables from .env file
+
+# supabase connection string(POSTGRESQL) for storing the agent's state and conversation history 
+CONN_STRING = os.getenv("SUPABASE_URL")
 
 def get_weather(city: str):
    """get weather for a givem city. 
@@ -31,7 +36,7 @@ def get_location(city: str):
 
 #initialize the Google Generative AI chat model
 llm = ChatOpenAI(
-    model="google/gemini-4-carbon",
+    model="google/gemini-3.8-flash",
     api_key=os.getenv("KODEKEY_API_KEY"),
     base_url="https://api.ai.kodekloud.com/v1",
     temperature=0.7
@@ -45,16 +50,33 @@ YOUR WORKFLOW:
 2. if user provide a city, you must call the get_weather(city) directly to get the weather for that city.
 3.  use your knowlege  to determine which temprature unit is standard for the given location.
 """
-agent = create_agent(model=llm, 
-                     tools=[get_weather,get_location],
-                     system_prompt=system_prompt)
 
-if __name__ == "__main__":
-    user_query = input("Ask your question: ")
 
-    response = agent.invoke({"messages":
-                            [{"role": "user",
-                            "content": user_query}]})
+with PostgresSaver.from_conn_string(CONN_STRING) as checkpointer:
+   checkpointer.setup()  # Ensure the database schema is set up
+   agent = create_agent(model=llm, 
+                        tools=[get_weather,get_location],
+                        system_prompt=system_prompt,
+                        checkpointer=checkpointer)
 
-    print(response['messages'][-1].content)
+   if __name__ == "__main__":
+      while True:
+         user_query = input("Ask your question: ")
+         if user_query.lower() in {"exit", "quit"}:
+               print("Goodbye!")
+               break
+         response = agent.invoke({"messages":
+                                 [{"role": "user",
+                                 "content": user_query}]},{"configurable":{"thread_id":"1"}})
+         #get the last message from the response and print it
+         #print(response['messages'])
+         for i in response['messages']:
+            #print(i.content)
+            if i.type == "human":
+               print(f"User: {i.content}")
+            if i.type == "ai" and i.content:
+               print(f"AI: {i.content}")
 
+         print(response['messages'][-1].content)
+
+    
